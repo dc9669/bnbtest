@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="trust-wallet-detection" content="none">
+  <title>USDT Transfer (BSC)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f9;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      padding: 25px;
+      width: 100%;
+      max-width: 400px;
+    }
+    h1 {
+      color: #333;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    #walletUI {
+      display: none;
+    }
+    #installUI {
+      text-align: center;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: bold;
+      color: #555;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      margin-bottom: 15px;
+      box-sizing: border-box;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    #connectBtn {
+      background-color: #F0B90B; /* 币安黄 */
+      color: #1E2026; /* 币安深灰 */
+    }
+    #transferBtn {
+      background-color: #F0B90B;
+      color: #1E2026;
+    }
+    #installBtn {
+      background-color: #3498db;
+    }
+    #status {
+      margin-top: 15px;
+      padding: 10px;
+      border-radius: 5px;
+      text-align: center;
+    }
+    .success {
+      background-color: #d4edda;
+      color: #155724;
+    }
+    .error {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+    #retryBtn {
+      background-color: #9b59b6;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>USDT Transfer (BSC)</h1>
+    
+    <!-- 钱包功能界面 -->
+    <div id="walletUI">
+      <label for="toAddress">Recipient Address:</label>
+      <input type="text" id="toAddress" placeholder="0x..." required>
+      
+      <label for="amount">Amount (USDT):</label>
+      <input type="number" id="amount" placeholder="10.5" step="0.01" required>
+      
+      <button id="transferBtn">Transfer USDT</button>
+      <div id="status"></div>
+    </div>
+    
+    <!-- 安装引导界面 -->
+    <div id="installUI">
+      <div id="notInstalledMsg">
+        <p>Binance Chain Wallet is not detected</p>
+        <button id="installBtn">Install Binance Chain Wallet</button>
+      </div>
+      <div id="notConnectedMsg" style="display:none;">
+        <p>Wallet detected but not connected</p>
+        <button id="connectBtn">Connect Wallet</button>
+      </div>
+      <button id="retryBtn">Retry Detection</button>
+    </div>
+  </div>
+
+  <script>
+    // ====================== 配置 ======================
+    const CONFIG = {
+      USDT: {
+        address: "0x55d398326f99059fF775485246999027B3197955", // BSC USDT合约
+        abi: [
+          {
+            "constant": false,
+            "inputs": [
+              {"name": "_to", "type": "address"},
+              {"name": "_value", "type": "uint256"}
+            ],
+            "name": "transfer",
+            "outputs": [{"name": "", "type": "bool"}],
+            "type": "function"
+          },
+          {
+            "constant": true,
+            "inputs": [],
+            "name": "decimals",
+            "outputs": [{"name": "", "type": "uint8"}],
+            "type": "function"
+          }
+        ]
+      },
+      BSC_NETWORK: {
+        chainId: "0x38", // BSC主网链ID 56
+        chainName: "Binance Smart Chain",
+        nativeCurrency: {
+          name: "BNB",
+          symbol: "bnb",
+          decimals: 18
+        },
+        rpcUrls: ["https://bsc-dataseed.binance.org/"],
+        blockExplorerUrls: ["https://bscscan.com"]
+      }
+    };
+
+    // ====================== 核心应用 ======================
+    class BSCUSDTTransfer {
+      constructor() {
+        this.initElements();
+        this.bindEvents();
+        this.initApp();
+      }
+      
+      initElements() {
+        this.elements = {
+          walletUI: document.getElementById('walletUI'),
+          installUI: document.getElementById('installUI'),
+          notInstalledMsg: document.getElementById('notInstalledMsg'),
+          notConnectedMsg: document.getElementById('notConnectedMsg'),
+          installBtn: document.getElementById('installBtn'),
+          connectBtn: document.getElementById('connectBtn'),
+          transferBtn: document.getElementById('transferBtn'),
+          retryBtn: document.getElementById('retryBtn'),
+          status: document.getElementById('status'),
+          toAddress: document.getElementById('toAddress'),
+          amount: document.getElementById('amount')
+        };
+      }
+      
+      bindEvents() {
+        this.elements.installBtn.addEventListener('click', () => {
+          window.open('https://chrome.google.com/webstore/detail/binance-chain-wallet/fhbohimaelbohpjbbldcngcnapndodjp', '_blank');
+        });
+        
+        this.elements.connectBtn.addEventListener('click', () => this.connectWallet());
+        this.elements.transferBtn.addEventListener('click', () => this.transferUSDT());
+        this.elements.retryBtn.addEventListener('click', () => this.initApp());
+        
+        // 监听钱包账户变化
+        if (window.BinanceChain) {
+          window.BinanceChain.on('accountsChanged', this.handleAccountsChanged);
+        }
+      }
+      
+      // ====================== 初始化逻辑 ======================
+      async initApp() {
+        this.showLoading();
+        
+        try {
+          // 检测Binance Chain Wallet
+          const isInstalled = await this.detectBinanceWallet();
+          
+          if (isInstalled) {
+            // 检查是否已连接账户
+            const accounts = await window.BinanceChain.request({ method: 'eth_accounts' });
+            
+            if (accounts.length > 0) {
+              this.account = accounts[0];
+              await this.ensureBSCNetwork();
+              this.initWeb3();
+              this.showWalletUI();
+              this.updateStatus(`Connected: ${this.formatAddress(this.account)}`, 'success');
+            } else {
+              this.showConnectUI();
+            }
+          } else {
+            this.showInstallUI();
+          }
+        } catch (error) {
+          console.error("初始化失败:", error);
+          this.showRetryOption();
+        }
+      }
+      
+      // ====================== 钱包检测 ======================
+      async detectBinanceWallet() {
+        // 方法1: 直接检测注入对象
+        if (typeof window.BinanceChain !== 'undefined') return true;
+        
+        // 方法2: 通过扩展ID检测（仅Chrome）
+        if (typeof chrome !== 'undefined' && chrome.runtime) {
+          try {
+            const response = await new Promise(resolve => {
+              chrome.runtime.sendMessage(
+                'fhbohimaelbohpjbbldcngcnapndodjp', // Binance Chain Wallet扩展ID
+                { method: 'ping' },
+                resolve
+              );
+            });
+            return !!response;
+          } catch (e) {
+            return false;
+          }
+        }
+        
+        return false;
+      }
+      
+      // ====================== 钱包操作 ======================
+      async connectWallet() {
+        try {
+          const accounts = await window.BinanceChain.request({ 
+            method: 'eth_requestAccounts' 
+          });
+          
+          if (accounts.length > 0) {
+            await this.ensureBSCNetwork();
+            this.account = accounts[0];
+            this.initWeb3();
+            this.showWalletUI();
+            this.updateStatus(`Connected: ${this.formatAddress(this.account)}`, 'success');
+          }
+        } catch (error) {
+          this.updateStatus(`Connection failed: ${error.message}`, 'error');
+        }
+      }
+      
+      // 确保连接的是BSC网络
+      async ensureBSCNetwork() {
+        try {
+          await window.BinanceChain.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: CONFIG.BSC_NETWORK.chainId }]
+          });
+        } catch (error) {
+          // 如果网络未添加，则添加BSC网络
+          if (error.code === 4902) {
+            await window.BinanceChain.request({
+              method: 'wallet_addEthereumChain',
+              params: [CONFIG.BSC_NETWORK]
+            });
+          }
+        }
+      }
+      
+      initWeb3() {
+        this.web3 = new Web3(window.BinanceChain);
+        this.contract = new this.web3.eth.Contract(
+          CONFIG.USDT.abi, 
+          CONFIG.USDT.address
+        );
+      }
+      
+      // ====================== USDT转账 ======================
+      async transferUSDT() {
+        const toAddress = this.elements.toAddress.value.trim();
+        const amount = this.elements.amount.value.trim();
+        
+        // 验证输入
+        if (!toAddress || !amount) {
+          this.updateStatus('Please fill all fields', 'error');
+          return;
+        }
+        
+        if (!this.web3.utils.isAddress(toAddress)) {
+          this.updateStatus('Invalid recipient address', 'error');
+          return;
+        }
+        
+        try {
+          this.updateStatus('Preparing transaction...', null);
+          
+          // 获取代币精度
+          const decimals = await this.contract.methods.decimals().call();
+          const amountInWei = this.web3.utils.toBN(amount)
+            .mul(this.web3.utils.toBN(10).pow(this.web3.utils.toBN(decimals)));
+          
+          this.updateStatus('Sending transaction...', null);
+          
+          // 估算Gas
+          const gasEstimate = await this.contract.methods
+            .transfer(toAddress, amountInWei.toString())
+            .estimateGas({ from: this.account });
+            
+          const gasPrice = await this.web3.eth.getGasPrice();
+          
+          // 发送交易
+          const receipt = await this.contract.methods
+            .transfer(toAddress, amountInWei.toString())
+            .send({
+              from: this.account,
+              gas: gasEstimate,
+              gasPrice: gasPrice
+            });
+          
+          this.updateStatus(
+            `Transaction successful!<br>
+            <a href="https://bscscan.com/tx/${receipt.transactionHash}" target="_blank">
+              View on BscScan
+            </a>`,
+            'success'
+          );
+        } catch (error) {
+          this.handleTransactionError(error);
+        }
+      }
+      
+      // ====================== UI控制 ======================
+      showWalletUI() {
+        this.elements.walletUI.style.display = 'block';
+        this.elements.installUI.style.display = 'none';
+      }
+      
+      showConnectUI() {
+        this.elements.walletUI.style.display = 'none';
+        this.elements.installUI.style.display = 'block';
+        this.elements.notInstalledMsg.style.display = 'none';
+        this.elements.notConnectedMsg.style.display = 'block';
+        this.elements.retryBtn.style.display = 'none';
+      }
+      
+      showInstallUI() {
+        this.elements.walletUI.style.display = 'none';
+        this.elements.installUI.style.display = 'block';
+        this.elements.notInstalledMsg.style.display = 'block';
+        this.elements.notConnectedMsg.style.display = 'none';
+        this.elements.retryBtn.style.display = 'none';
+      }
+      
+      showLoading() {
+        this.elements.status.innerHTML = 'Detecting wallet...';
+        this.elements.status.className = '';
+      }
+      
+      showRetryOption() {
+        this.elements.retryBtn.style.display = 'block';
+        this.updateStatus('Detection failed. Please retry or check console', 'error');
+      }
+      
+      updateStatus(message, type) {
+        this.elements.status.innerHTML = message;
+        this.elements.status.className = type || '';
+      }
+      
+      // ====================== 工具方法 ======================
+      formatAddress(address) {
+        return address ? `${address.slice(0, 6)}...${address.slice(-4)}` : '';
+      }
+      
+      // ====================== 事件处理器 ======================
+      handleAccountsChanged = (accounts) => {
+        if (accounts.length > 0) {
+          this.account = accounts[0];
+          this.updateStatus(`Account changed: ${this.formatAddress(this.account)}`, 'success');
+        } else {
+          this.handleDisconnect();
+        }
+      };
+      
+      handleDisconnect() {
+        this.account = null;
+        this.showConnectUI();
+        this.updateStatus('Wallet disconnected', 'error');
+      }
+      
+      handleTransactionError(error) {
+        let errorMsg = error.message;
+        
+        // 常见错误处理
+        if (error.code === 4001) {
+          errorMsg = 'User denied transaction';
+        } else if (error.message.includes('insufficient funds')) {
+          errorMsg = 'Insufficient BNB for gas fee';
+        } else if (error.message.includes('invalid address')) {
+          errorMsg = 'Invalid recipient address';
+        } else if (error.message.includes('execution reverted')) {
+          errorMsg = 'Transaction reverted (check allowance)';
+        }
+        
+        this.updateStatus(`Error: ${errorMsg}`, 'error');
+      }
+    }
+
+    // ====================== 页面初始化 ======================
+    window.addEventListener('load', () => {
+      // 动态加载Web3.js（带缓存破坏）
+      const web3Script = document.createElement('script');
+      web3Script.src = `https://cdn.jsdelivr.net/npm/web3@1.5.2/dist/web3.min.js?_=${Date.now()}`;
+      web3Script.onload = () => new BSCUSDTTransfer();
+      web3Script.onerror = () => {
+        console.error('Failed to load Web3.js');
+        document.getElementById('status').innerHTML = 
+          'Failed to load required scripts. Please refresh.';
+      };
+      document.head.appendChild(web3Script);
+      
+      // 防止Trust Wallet自动检测
+      if (window.BinanceChain) {
+        window.ethereum = undefined;
+      }
+    });
+  </script>
+</body>
+</html>
